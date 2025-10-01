@@ -1,0 +1,6 @@
+[build]
+target = "aarch64-unknown-none"
+
+[target.aarch64-unknown-none]
+# The -C link-arg flag tells rustc to pass "-Tlinker.ld" to the linker.
+rustflags = ["-C", "link-arg=-Tlinker.ld"]
