@@ -20,8 +20,8 @@ KERNEL_ELF_RELEASE = target/$(TARGET_TRIPLE)/release/$(PROJECT_NAME)
 # --- OpenOCD Config ---
 # Assumes these files are in the directory where you run 'make'
 # or in OpenOCD's default search path.
-OPENOCD_INTERFACE_CFG = interface/cmsis-dap.cfg
-OPENOCD_TARGET_CFG = target/raspberrypi5.cfg
+OPENOCD_INTERFACE_CFG = debug-helper/cmsis-dap.cfg
+OPENOCD_TARGET_CFG = debug-helper/raspberrypi5.cfg
 
 .PHONY: all build build-release image openocd-pi5 gdb-pi5 clean
 
