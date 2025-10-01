@@ -1,6 +1,10 @@
 [package]
 name = "bare_metal_led"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"  # Changed from 2024 to 2021 for compatibility
+
+[[bin]]
+name = "bare_metal_led"
+path = "src/main.rs"
 
 [dependencies]
