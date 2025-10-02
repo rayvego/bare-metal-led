@@ -38,7 +38,6 @@ global_asm!(
     "   mov  x1, #0",             
     ".L_cache_level_loop:",
     "   add  x2, x1, x1, lsr #1", 
-    // --- THIS IS THE CORRECTED LINE ---
     "   lsl  x0, x1, #1",     // x0 = level * 2 (for CSSELR shift)
     "   msr  csselr_el1, x0",     
     "   isb",                    
@@ -115,11 +114,12 @@ pub extern "C" fn rust_main() -> ! {
     const GPIO14_CTRL_ADDR: u64 = IO_BANK0_BASE + 0x074;
     const PADS14_CTRL_ADDR: u64 = PADS_BANK0_BASE + 0x03c;
     
-    const BIT_PADS_OD: u32 = 1 << 7;
-    const BIT_PADS_IE: u32 = 1 << 6;
-    const BIT_IO_OEOVER: u32 = 3 << 14;
-    const BIT_IO_OUTOVER: u32 = 3 << 12;
+    const BIT_PADS_OD: u32 = 1 << 7; // For bit 7 of the Pad Controller
+    const BIT_PADS_IE: u32 = 1 << 6; // For bit 6 of the Pad Controller
+    const BIT_IO_OEOVER: u32 = 3 << 14; // For bits 15:14 of the IO Controller
+    const BIT_IO_OUTOVER: u32 = 3 << 12; // For bits 13:12 of the IO Controller
 
+    // unsafe raw pointer in rust
     let gpio_ctrl = GPIO14_CTRL_ADDR as *mut u32;
     let pad_ctrl = PADS14_CTRL_ADDR as *mut u32;
 
