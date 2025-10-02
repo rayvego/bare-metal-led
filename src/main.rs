@@ -104,36 +104,126 @@ global_asm!(
 );
 
 
-/// The main Rust function, called after assembly setup.
+// Physical addresses calculated from BAR + Offset
+const UART0_BASE: u64 = 0x1F00030000;
+
+// PL011 Register Offsets (from bcm2711-peripherals.pdf, Table 172)
+const UART_DR_OFFSET:   u64 = 0x00;
+const UART_FR_OFFSET:   u64 = 0x18;
+const UART_IBRD_OFFSET: u64 = 0x24;
+const UART_FBRD_OFFSET: u64 = 0x28;
+const UART_LCRH_OFFSET: u64 = 0x2c;
+const UART_CR_OFFSET:   u64 = 0x30;
+const UART_ICR_OFFSET:  u64 = 0x44;
+
+// Flag Register (FR) bits
+const UART_FR_TXFF: u32 = 1 << 5; // Transmit FIFO Full
+
+// Line Control Register (LCRH) bits
+const UART_LCRH_WLEN8: u32 = 0b11 << 5; // 8-bit word length
+const UART_LCRH_FEN:   u32 = 1 << 4;    // Enable FIFOs
+
+// Control Register (CR) bits
+const UART_CR_UARTEN: u32 = 1 << 0; // UART Enable
+const UART_CR_TXE:    u32 = 1 << 8; // Transmit Enable
+const UART_CR_RXE:    u32 = 1 << 9; // Receive Enable
+
+/// Initializes UART0 for 115200 baud communication.
+fn uart_init() {
+    unsafe {
+        // --- Step 1: Disable the UART to configure it ---
+        write_volatile((UART0_BASE + UART_CR_OFFSET) as *mut u32, 0);
+
+        // --- Step 2: Set the Baud Rate ---
+        // Formula: BAUDDIV = UARTCLK / (16 * Baud Rate)
+        // We assume UARTCLK is 48MHz from the DTS.
+        // BAUDDIV = 48,000,000 / (16 * 115200) = 26.0416...
+        // IBRD = 26
+        // FBRD = integer((0.0416 * 64) + 0.5) = 3
+        write_volatile((UART0_BASE + UART_IBRD_OFFSET) as *mut u32, 26);
+        write_volatile((UART0_BASE + UART_FBRD_OFFSET) as *mut u32, 3);
+
+        // --- Step 3: Configure the Line Control ---
+        // Enable FIFOs and set 8-bit word length, no parity, 1 stop bit.
+        write_volatile((UART0_BASE + UART_LCRH_OFFSET) as *mut u32, UART_LCRH_FEN | UART_LCRH_WLEN8);
+
+        // --- Step 4: Clear all interrupts ---
+        write_volatile((UART0_BASE + UART_ICR_OFFSET) as *mut u32, 0x7FF);
+
+        // --- Step 5: Enable the UART, TX, and RX ---
+        write_volatile((UART0_BASE + UART_CR_OFFSET) as *mut u32, UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE);
+    }
+}
+
+/// Transmits a single character over UART0.
+fn uart_putc(c: char) {
+    unsafe {
+        // Loop until the transmit FIFO is no longer full.
+        while read_volatile((UART0_BASE + UART_FR_OFFSET) as *mut u32) & UART_FR_TXFF != 0 {}
+        // Write the character to the data register.
+        write_volatile((UART0_BASE + UART_DR_OFFSET) as *mut u32, c as u32);
+    }
+}
+
+/// Transmits a string slice over UART0.
+fn uart_puts(s: &str) {
+    for c in s.chars() {
+        uart_putc(c);
+    }
+}
+
+
 #[no_mangle]
 pub extern "C" fn rust_main() -> ! {
+    // --- GPIO Address and Bitmask Constants (from previous code) ---
     const BCM2712_PCIE_BASE: u64 = 0x1f00000000;
     const IO_BANK0_BASE: u64 = BCM2712_PCIE_BASE + 0xd0000;
     const PADS_BANK0_BASE: u64 = BCM2712_PCIE_BASE + 0xf0000;
-
+    
+    // GPIO 14 (TXD0)
     const GPIO14_CTRL_ADDR: u64 = IO_BANK0_BASE + 0x074;
     const PADS14_CTRL_ADDR: u64 = PADS_BANK0_BASE + 0x03c;
-    
-    const BIT_PADS_OD: u32 = 1 << 7; // For bit 7 of the Pad Controller
-    const BIT_PADS_IE: u32 = 1 << 6; // For bit 6 of the Pad Controller
-    const BIT_IO_OEOVER: u32 = 3 << 14; // For bits 15:14 of the IO Controller
-    const BIT_IO_OUTOVER: u32 = 3 << 12; // For bits 13:12 of the IO Controller
+    // GPIO 15 (RXD0)
+    const GPIO15_CTRL_ADDR: u64 = IO_BANK0_BASE + 0x07c;
+    const PADS15_CTRL_ADDR: u64 = PADS_BANK0_BASE + 0x040;
 
-    // unsafe raw pointer in rust
-    let gpio_ctrl = GPIO14_CTRL_ADDR as *mut u32;
-    let pad_ctrl = PADS14_CTRL_ADDR as *mut u32;
+    // --- Pad Control Bits ---
+    const BIT_PADS_OD: u32 = 1 << 7;  // Output Disable
+    const BIT_PADS_IE: u32 = 1 << 6;  // Input Enable
+    const BIT_PADS_PUE: u32 = 1 << 3; // Pull-Up Enable
+
+    // --- IO Control Fields ---
+    const FUNCSEL_FIELD_LSB: u32 = 0;
+    const FUNCSEL_FIELD_MASK: u32 = 0x1F << FUNCSEL_FIELD_LSB;
+    const FUNC_UART0: u32 = 4;
 
     unsafe {
-        // 1. Configure the Physical Pad
-        let mut pdctrl = read_volatile(pad_ctrl);
-        pdctrl &= !BIT_PADS_OD; // Enable the output driver
-        pdctrl |= BIT_PADS_IE;
-        write_volatile(pad_ctrl, pdctrl);
+        // --- Step 1: Configure GPIO Pins (The Two Locks) ---
+        
+        // Configure GPIO 14 as UART0 TX
+        let mut pads14_val = read_volatile(PADS14_CTRL_ADDR as *mut u32);
+        pads14_val &= !BIT_PADS_OD; // LOCK 1: Enable output driver
+        write_volatile(PADS14_CTRL_ADDR as *mut u32, pads14_val);
 
-        // 2. Configure the Logical IO
-        let mut ioctrl = read_volatile(gpio_ctrl);
-        ioctrl |= BIT_IO_OEOVER | BIT_IO_OUTOVER; // Force high output
-        write_volatile(gpio_ctrl, ioctrl);
+        let mut io14_val = read_volatile(GPIO14_CTRL_ADDR as *mut u32);
+        io14_val &= !FUNCSEL_FIELD_MASK; // Clear the function field
+        io14_val |= FUNC_UART0 << FUNCSEL_FIELD_LSB; // LOCK 2: Set function to UART0
+        write_volatile(GPIO14_CTRL_ADDR as *mut u32, io14_val);
+
+        // Configure GPIO 15 as UART0 RX
+        let mut pads15_val = read_volatile(PADS15_CTRL_ADDR as *mut u32);
+        pads15_val |= BIT_PADS_IE; // LOCK 1: Enable input buffer
+        pads15_val |= BIT_PADS_PUE; // Enable pull-up as per DTS
+        write_volatile(PADS15_CTRL_ADDR as *mut u32, pads15_val);
+
+        let mut io15_val = read_volatile(GPIO15_CTRL_ADDR as *mut u32);
+        io15_val &= !FUNCSEL_FIELD_MASK; // Clear the function field
+        io15_val |= FUNC_UART0 << FUNCSEL_FIELD_LSB; // LOCK 2: Set function to UART0
+        write_volatile(GPIO15_CTRL_ADDR as *mut u32, io15_val);
+        
+        // --- Step 2: Initialize and use the UART ---
+        uart_init();
+        uart_puts("Hello, world from bare-metal Rust on Raspberry Pi 5!\r\n");
     }
 
     loop {}
