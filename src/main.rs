@@ -196,5 +196,12 @@ pub extern "C" fn rust_main() -> ! {
 
     // Blink to verify MMU is working
     loop {
+        delay(5000000);
+        
+        unsafe {
+            let mut ioctrl = read_volatile(gpio_ctrl);
+            ioctrl ^= BIT_IO_OUTOVER; // Toggle
+            write_volatile(gpio_ctrl, ioctrl);
+        }
     }
 }
